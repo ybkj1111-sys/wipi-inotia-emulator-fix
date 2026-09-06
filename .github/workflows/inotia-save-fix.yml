@@ -1,0 +1,242 @@
+name: Build Inotia Save Fix APK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout WIPI Emulator fork
+        uses: actions/checkout@v4
+
+      - name: Checkout pinned WIE core
+        uses: actions/checkout@v4
+        with:
+          repository: ParkJeongseop/wie
+          ref: 0e4be660
+          path: wie-local
+
+      - name: Patch KTF slot 4 seek semantics
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path("wie-local/wie_wipi_c/src/api/database.rs")
+          s = p.read_text(encoding="utf-8")
+
+          required = [
+              "pub async fn select_record_ktf(",
+              "if rec_id >= 0 {",
+              "Ok(-22) // M_E_BADRECID",
+              "struct DatabaseHandle",
+              "read_cursor: u32",
+              "write_cursor: u32",
+              "buffer_len: u32",
+          ]
+          for needle in required:
+              if needle not in s:
+                  raise SystemExit(f"Expected source marker not found: {needle!r}")
+
+          m = re.search(r"pub async fn select_record_ktf\s*\(", s)
+          if not m:
+              raise SystemExit("select_record_ktf not found")
+
+          brace_start = s.find("{", m.end())
+          if brace_start < 0:
+              raise SystemExit("opening brace for select_record_ktf not found")
+
+          depth = 0
+          end = None
+          for i in range(brace_start, len(s)):
+              ch = s[i]
+              if ch == "{":
+                  depth += 1
+              elif ch == "}":
+                  depth -= 1
+                  if depth == 0:
+                      end = i + 1
+                      break
+          if end is None:
+              raise SystemExit("could not locate end of select_record_ktf")
+
+          original = s[m.start():end]
+          print("----- ORIGINAL select_record_ktf -----")
+          print(original)
+          print("--------------------------------------")
+
+          replacement = r'''pub async fn select_record_ktf(
+              context: &mut dyn WIPICContext,
+              db_id: i32,
+              rec_id: i32,
+              mode: WIPICWord,
+              _buf_len: WIPICWord,
+          ) -> Result<i32> {
+              tracing::debug!(
+                  "MC_dbSelectRecord(KTF seek)({db_id:#x}, offset={rec_id}, mode={mode}, {_buf_len})"
+              );
+
+              let Some(mut handle) = load_handle(context, db_id)? else {
+                  return Ok(-25); // M_E_INVALIDHANDLE
+              };
+
+              // Inotia 1 uses KTF slot 4 as a signed stream seek:
+              //   mode 0 -> SET  (base = 0)
+              //   mode 1 -> CUR  (base = current read cursor)
+              //   mode 2 -> END  (base = current buffer length)
+              //   mode 3 -> END-compatible alias (compatibility hypothesis)
+              //
+              // mode 3 is intentionally marked as a compatibility hypothesis:
+              // Inotia calls (handle, -44, 3) and immediately reads a 44-byte
+              // footer, which is consistent with an END-relative seek.
+              let base: i64 = match mode as i32 {
+                  0 => 0,
+                  1 => handle.read_cursor as i64,
+                  2 => handle.buffer_len as i64,
+                  3 => handle.buffer_len as i64,
+                  _ => {
+                      tracing::warn!("Unknown KTF DB seek mode {mode}");
+                      return Ok(-22);
+                  }
+              };
+
+              let Some(position) = base.checked_add(rec_id as i64) else {
+                  return Ok(-22);
+              };
+
+              // Preserve the old implementation's ability to seek forward past EOF.
+              // stream_write already grows and zero-fills the backing buffer.
+              if position < 0 || position > u32::MAX as i64 {
+                  return Ok(-22);
+              }
+
+              let position = position as u32;
+              handle.read_cursor = position;
+              handle.write_cursor = position;
+              write_generic(context, db_id as _, handle)?;
+
+              Ok(position as i32)
+          }'''
+
+          patched = s[:m.start()] + replacement + s[end:]
+          p.write_text(patched, encoding="utf-8")
+
+          check = p.read_text(encoding="utf-8")
+          assert "END-compatible alias (compatibility hypothesis)" in check
+          assert "Ok(position as i32)" in check
+          print("KTF slot4 patch applied successfully")
+          PY
+
+      - name: Point WIPI Emulator at patched local WIE
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path("rust/Cargo.toml")
+          s = p.read_text(encoding="utf-8")
+
+          crates = [
+              "wie_backend",
+              "wie_ktf",
+              "wie_lgt",
+              "wie_skt",
+              "wie_j2me",
+              "wie_util",
+          ]
+
+          for crate in crates:
+              pattern = (
+                  rf'^{crate}\s*=\s*\{{\s*git\s*=\s*'
+                  rf'"https://github\.com/ParkJeongseop/wie\.git",\s*'
+                  rf'rev\s*=\s*"0e4be660"\s*\}}\s*$'
+              )
+              repl = f'{crate} = {{ path = "../wie-local/{crate}" }}'
+              s, n = re.subn(pattern, repl, s, count=1, flags=re.MULTILINE)
+              if n != 1:
+                  raise SystemExit(f"Could not replace pinned dependency line for {crate}")
+
+          p.write_text(s, encoding="utf-8")
+          print("Local WIE dependencies configured")
+          print(p.read_text(encoding="utf-8"))
+          PY
+
+      - name: Verify patched source and dependency wiring
+        shell: bash
+        run: |
+          grep -n "pub async fn select_record_ktf" wie-local/wie_wipi_c/src/api/database.rs
+          grep -n "END-compatible alias" wie-local/wie_wipi_c/src/api/database.rs
+          grep -n 'wie_backend = { path = "../wie-local/wie_backend" }' rust/Cargo.toml
+          grep -n 'wie_ktf = { path = "../wie-local/wie_ktf" }' rust/Cargo.toml
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android platform and NDK
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "ndk;27.2.12479018"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+
+      - name: Rust compile check
+        working-directory: rust
+        run: cargo check -p wipi_android
+
+      - name: Build Rust JNI library
+        working-directory: rust
+        shell: bash
+        run: |
+          mkdir -p ../android/app/src/main/jniLibs
+          cargo ndk \
+            -t arm64-v8a \
+            -o ../android/app/src/main/jniLibs \
+            build --release -p wipi_android
+          test -f ../android/app/src/main/jniLibs/arm64-v8a/libwipi_android.so
+          ls -lh ../android/app/src/main/jniLibs/arm64-v8a/libwipi_android.so
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.11.1"
+
+      - name: Build debug APK
+        run: gradle -p android :app:assembleDebug --stacktrace
+
+      - name: Verify APK
+        shell: bash
+        run: |
+          test -f android/app/build/outputs/apk/debug/app-debug.apk
+          ls -lh android/app/build/outputs/apk/debug/app-debug.apk
+          sha256sum android/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: WIPI-Inotia-SaveFix-debug
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
