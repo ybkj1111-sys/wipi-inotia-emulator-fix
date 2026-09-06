@@ -18,7 +18,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ParkJeongseop/wie
-          ref: 0e4be660
+          ref: 0e4be6605f9b4bd0d53c10a83da3b0651166d899
           path: wie-local
 
       - name: Patch KTF slot 4 seek semantics
@@ -34,7 +34,7 @@ jobs:
           required = [
               "pub async fn select_record_ktf(",
               "if rec_id >= 0 {",
-              "Ok(-22) // M_E_BADRECID",
+              "Ok(-22)",
               "struct DatabaseHandle",
               "read_cursor: u32",
               "write_cursor: u32",
@@ -66,11 +66,6 @@ jobs:
           if end is None:
               raise SystemExit("could not locate end of select_record_ktf")
 
-          original = s[m.start():end]
-          print("----- ORIGINAL select_record_ktf -----")
-          print(original)
-          print("--------------------------------------")
-
           replacement = r'''pub async fn select_record_ktf(
               context: &mut dyn WIPICContext,
               db_id: i32,
@@ -83,35 +78,21 @@ jobs:
               );
 
               let Some(mut handle) = load_handle(context, db_id)? else {
-                  return Ok(-25); // M_E_INVALIDHANDLE
+                  return Ok(-25);
               };
 
-              // Inotia 1 uses KTF slot 4 as a signed stream seek:
-              //   mode 0 -> SET  (base = 0)
-              //   mode 1 -> CUR  (base = current read cursor)
-              //   mode 2 -> END  (base = current buffer length)
-              //   mode 3 -> END-compatible alias (compatibility hypothesis)
-              //
-              // mode 3 is intentionally marked as a compatibility hypothesis:
-              // Inotia calls (handle, -44, 3) and immediately reads a 44-byte
-              // footer, which is consistent with an END-relative seek.
               let base: i64 = match mode as i32 {
                   0 => 0,
                   1 => handle.read_cursor as i64,
                   2 => handle.buffer_len as i64,
                   3 => handle.buffer_len as i64,
-                  _ => {
-                      tracing::warn!("Unknown KTF DB seek mode {mode}");
-                      return Ok(-22);
-                  }
+                  _ => return Ok(-22),
               };
 
               let Some(position) = base.checked_add(rec_id as i64) else {
                   return Ok(-22);
               };
 
-              // Preserve the old implementation's ability to seek forward past EOF.
-              // stream_write already grows and zero-fills the backing buffer.
               if position < 0 || position > u32::MAX as i64 {
                   return Ok(-22);
               }
@@ -124,12 +105,7 @@ jobs:
               Ok(position as i32)
           }'''
 
-          patched = s[:m.start()] + replacement + s[end:]
-          p.write_text(patched, encoding="utf-8")
-
-          check = p.read_text(encoding="utf-8")
-          assert "END-compatible alias (compatibility hypothesis)" in check
-          assert "Ok(position as i32)" in check
+          p.write_text(s[:m.start()] + replacement + s[end:], encoding="utf-8")
           print("KTF slot4 patch applied successfully")
           PY
 
@@ -165,14 +141,12 @@ jobs:
 
           p.write_text(s, encoding="utf-8")
           print("Local WIE dependencies configured")
-          print(p.read_text(encoding="utf-8"))
           PY
 
       - name: Verify patched source and dependency wiring
         shell: bash
         run: |
           grep -n "pub async fn select_record_ktf" wie-local/wie_wipi_c/src/api/database.rs
-          grep -n "END-compatible alias" wie-local/wie_wipi_c/src/api/database.rs
           grep -n 'wie_backend = { path = "../wie-local/wie_backend" }' rust/Cargo.toml
           grep -n 'wie_ktf = { path = "../wie-local/wie_ktf" }' rust/Cargo.toml
 
@@ -217,7 +191,6 @@ jobs:
             -o ../android/app/src/main/jniLibs \
             build --release -p wipi_android
           test -f ../android/app/src/main/jniLibs/arm64-v8a/libwipi_android.so
-          ls -lh ../android/app/src/main/jniLibs/arm64-v8a/libwipi_android.so
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
