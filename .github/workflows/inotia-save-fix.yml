@@ -85,8 +85,7 @@ jobs:
                   0 => 0,
                   1 => handle.read_cursor as i64,
                   2 => handle.buffer_len as i64,
-                  // Assumption: Inotia's observed mode 3 behaves as END-relative seek.
-                  // This is still unverified on-device and must be validated by save/load testing.
+                  // 이 부분은 가정이며 검증 필요: Inotia의 mode 3을 END-relative seek 호환 alias로 처리.
                   3 => handle.buffer_len as i64,
                   _ => return Ok(-22),
               };
@@ -95,7 +94,7 @@ jobs:
                   return Ok(-22);
               };
 
-              if position < 0 || position > u32::MAX as i64 {
+              if position < 0 || position > i32::MAX as i64 {
                   return Ok(-22);
               }
 
@@ -177,7 +176,9 @@ jobs:
             "platforms;android-36" \
             "build-tools;36.0.0" \
             "ndk;27.2.12479018"
-          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+          NDK_PATH="$ANDROID_HOME/ndk/27.2.12479018"
+          echo "ANDROID_NDK_HOME=$NDK_PATH" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$NDK_PATH" >> "$GITHUB_ENV"
 
       - name: Install native build dependencies
         shell: bash
@@ -194,7 +195,10 @@ jobs:
         shell: bash
         run: |
           mkdir -p ../android/app/src/main/jniLibs
+          echo "Using NDK: $ANDROID_NDK_HOME"
+          test "$ANDROID_NDK_HOME" = "$ANDROID_NDK_ROOT"
           cargo ndk \
+            -p 26 \
             -t arm64-v8a \
             -o ../android/app/src/main/jniLibs \
             build --release -p wipi_android
