@@ -1,4 +1,4 @@
-name: Build Inotia Save Fix APK
+\name: Build Inotia Save Fix APK
 
 on:
   workflow_dispatch:
@@ -173,37 +173,37 @@ jobs:
           if marker not in s:
               raise SystemExit("GameLibrary marker not found")
           bundle_code = r'''
-
-    init {
-        seedBundledInotia()
-    }
-
-    /** APK 내장 이노티아1을 최초 실행 시 일반 게임 라이브러리에 설치한다. */
-    private fun seedBundledInotia() {
-        val id = "inotia1-bundled"
-        val dir = File(root, id)
-        val filename = "inotia1.zip"
-        val gameFile = File(dir, filename)
-        val metaFile = File(dir, "meta.json")
-
-        if (gameFile.exists() && metaFile.exists()) return
-
-        try {
-            val bytes = context.assets.open("inotia_chronoswing.zip").use { it.readBytes() }
-            dir.mkdirs()
-            gameFile.writeBytes(bytes)
-            WipiNative.nativeGameIcon(bytes)?.let { File(dir, "cover.png").writeBytes(it) }
-            val detectedName = WipiNative.nativeGameName(bytes)
-                ?.toString(Charset.forName("EUC-KR"))
-                ?.trim()
-                ?.takeIf { it.isNotEmpty() }
-            val name = detectedName ?: "이노티아 연대기1"
-            metaFile.writeText(JSONObject().put("name", name).put("filename", filename).toString())
-        } catch (_: Exception) {
-            // 이 부분은 가정이며 검증 필요: 내장 asset 복사 실패 시 기존 라이브러리 화면을 유지한다.
-        }
-    }
-'''
+          
+              init {
+                  seedBundledInotia()
+              }
+          
+              /** APK 내장 이노티아1을 최초 실행 시 일반 게임 라이브러리에 설치한다. */
+              private fun seedBundledInotia() {
+                  val id = "inotia1-bundled"
+                  val dir = File(root, id)
+                  val filename = "inotia1.zip"
+                  val gameFile = File(dir, filename)
+                  val metaFile = File(dir, "meta.json")
+          
+                  if (gameFile.exists() && metaFile.exists()) return
+          
+                  try {
+                      val bytes = context.assets.open("inotia_chronoswing.zip").use { it.readBytes() }
+                      dir.mkdirs()
+                      gameFile.writeBytes(bytes)
+                      WipiNative.nativeGameIcon(bytes)?.let { File(dir, "cover.png").writeBytes(it) }
+                      val detectedName = WipiNative.nativeGameName(bytes)
+                          ?.toString(Charset.forName("EUC-KR"))
+                          ?.trim()
+                          ?.takeIf { it.isNotEmpty() }
+                      val name = detectedName ?: "이노티아 연대기1"
+                      metaFile.writeText(JSONObject().put("name", name).put("filename", filename).toString())
+                  } catch (_: Exception) {
+                      // 이 부분은 가정이며 검증 필요: 내장 asset 복사 실패 시 기존 라이브러리 화면을 유지한다.
+                  }
+              }
+          '''
           s = s.replace(marker, marker + bundle_code, 1)
           p.write_text(s, encoding="utf-8")
 
@@ -213,20 +213,20 @@ jobs:
           if marker not in s:
               raise SystemExit("MainActivity marker not found")
           auto_code = r'''
-
-        LaunchedEffect(Unit) {
-            val entry = games.firstOrNull { it.id == "inotia1-bundled" }
-            if (entry != null) {
-                entry.dataDir.mkdirs()
-                if (start(entry.gameFile.readBytes(), entry.filename, entry.dataDir)) {
-                    errorMessage = null
-                    screen = Screen.Emulator
-                } else {
-                    errorMessage = pendingError() ?: getString(R.string.error_start_failed)
-                }
-            }
-        }
-'''
+          
+                  LaunchedEffect(Unit) {
+                      val entry = games.firstOrNull { it.id == "inotia1-bundled" }
+                      if (entry != null) {
+                          entry.dataDir.mkdirs()
+                          if (start(entry.gameFile.readBytes(), entry.filename, entry.dataDir)) {
+                              errorMessage = null
+                              screen = Screen.Emulator
+                          } else {
+                              errorMessage = pendingError() ?: getString(R.string.error_start_failed)
+                          }
+                      }
+                  }
+          '''
           s = s.replace(marker, marker + auto_code, 1)
           p.write_text(s, encoding="utf-8")
 
