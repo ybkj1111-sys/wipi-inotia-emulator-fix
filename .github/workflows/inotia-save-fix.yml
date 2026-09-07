@@ -85,6 +85,8 @@ jobs:
                   0 => 0,
                   1 => handle.read_cursor as i64,
                   2 => handle.buffer_len as i64,
+                  // Assumption: Inotia's observed mode 3 behaves as END-relative seek.
+                  // This is still unverified on-device and must be validated by save/load testing.
                   3 => handle.buffer_len as i64,
                   _ => return Ok(-22),
               };
@@ -177,9 +179,15 @@ jobs:
             "ndk;27.2.12479018"
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
 
-      - name: Rust compile check
+      - name: Install native build dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libasound2-dev
+
+      - name: Rust compile check (Android target)
         working-directory: rust
-        run: cargo check -p wipi_android
+        run: cargo check -p wipi_android --target aarch64-linux-android
 
       - name: Build Rust JNI library
         working-directory: rust
