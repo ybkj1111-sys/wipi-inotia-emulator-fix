@@ -1,4 +1,4 @@
-\name: Build Inotia Save Fix APK
+name: Build Inotia Save Fix APK
 
 on:
   workflow_dispatch:
